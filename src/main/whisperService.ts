@@ -4,15 +4,9 @@ import { ipcMain } from 'electron';
 import Store from 'electron-store';
 import { VideoDownloader } from './videoDownloader';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
-import * as fs from 'fs';
-import { WaveFile } from 'wavefile';
 import * as path from 'path';
-import * as os from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { Worker } from 'worker_threads';
-
-const execAsync = promisify(exec);
+import * as fs from 'fs';
 
 // 设置环境变量，强制使用 onnxruntime-node
 process.env.TRANSFORMERS_JS_BACKEND = 'onnxruntime-node';
@@ -33,13 +27,6 @@ if (proxyUrl) {
 
 const store = new Store();
 
-interface WavFormat {
-  sampleRate: number;
-  bitsPerSample: number;
-  numChannels: number;
-  audioFormat: number;
-}
-
 class WhisperService {
   private transcriber: any = null;
   private isInitializing: boolean = false;
@@ -49,88 +36,54 @@ class WhisperService {
     this.setupIpcHandlers();
   }
 
-  private async convertToWav(inputPath: string): Promise<string> {
+  private async handleTranscription(event: Electron.IpcMainInvokeEvent, input: { type: 'file' | 'url', path?: string, url?: string }) {
     try {
-      console.log('开始转换音频文件...');
-      const outputPath = path.join(os.tmpdir(), `${Date.now()}.wav`);
+      let audioPath: string | null = null;
 
-      // 使用系统 FFmpeg 命令
-      const command = `ffmpeg -i "${inputPath}" -ar 16000 -ac 1 -c:a pcm_s16le "${outputPath}"`;
-      console.log('执行命令:', command);
+      if (input.type === 'url' && input.url) {
+        event.sender.send('transcription-status', {
+          status: 'downloading',
+          message: '正在下载音频...'
+        });
 
-      const { stdout, stderr } = await execAsync(command);
-      if (stderr) {
-        console.log('FFmpeg 输出:', stderr);
+        const videoDownloader = new VideoDownloader();
+        try {
+          audioPath = await videoDownloader.downloadAudio(input.url);
+          // 验证文件是否存在
+          if (!fs.existsSync(audioPath)) {
+            throw new Error('下载的音频文件未找到');
+          }
+
+          const result = await this.processAudio(event, audioPath);
+
+          // 清理临时文件
+          await videoDownloader.cleanup(audioPath);
+          return result;
+        } catch (error) {
+          if (audioPath) {
+            await videoDownloader.cleanup(audioPath);
+          }
+          throw error;
+        }
+      } else if (input.type === 'file' && input.path) {
+        return await this.processAudio(event, input.path);
+      } else {
+        throw new Error('无效的输入');
       }
-
-      console.log('音频转换完成');
-      return outputPath;
     } catch (error) {
-      console.error('音频转换失败:', error);
-      throw error;
+      console.error('转换失败:', error);
+      event.sender.send('transcription-status', {
+        status: 'error',
+        message: `转换失败: ${error instanceof Error ? error.message : '未知错误'}`
+      });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : '转换失败'
+      };
     }
   }
 
-  private async convertToFloat32Array(audioData: Buffer): Promise<Float32Array> {
-    // 使用 wavefile 解析 WAV 文件
-    const wav = new WaveFile(audioData);
-
-    // 获取格式信息
-    const format = wav.fmt as WavFormat;
-    console.log('音频格式:', {
-      sampleRate: format.sampleRate,
-      bitsPerSample: format.bitsPerSample,
-      numChannels: format.numChannels,
-      format: format.audioFormat
-    });
-
-    // 确保采样率是 16000Hz
-    if (format.sampleRate !== 16000) {
-      throw new Error('音频采样率必须是 16000Hz');
-    }
-
-    // 获取音频数据
-    const samples = wav.getSamples();
-
-    if (Array.isArray(samples)) {
-      // 如果是多声道，只取第一个声道
-      const channelData = samples[0];
-      console.log('音频数据范围:', {
-        min: Math.min(...channelData),
-        max: Math.max(...channelData)
-      });
-
-      // 如果数据不是 32 位浮点数，需要进行归一化
-      if (format.bitsPerSample !== 32) {
-        const maxValue = Math.pow(2, format.bitsPerSample - 1) - 1;
-        const float32Data = new Float32Array(channelData.length);
-        for (let i = 0; i < channelData.length; i++) {
-          float32Data[i] = channelData[i] / maxValue;
-        }
-        return float32Data;
-      }
-      return new Float32Array(channelData);
-    } else {
-      // 单声道
-      console.log('音频数据范围:', {
-        min: Math.min(...samples),
-        max: Math.max(...samples)
-      });
-
-      // 如果数据不是 32 位浮点数，需要进行归一化
-      if (format.bitsPerSample !== 32) {
-        const maxValue = Math.pow(2, format.bitsPerSample - 1) - 1;
-        const float32Data = new Float32Array(samples.length);
-        for (let i = 0; i < samples.length; i++) {
-          float32Data[i] = samples[i] / maxValue;
-        }
-        return float32Data;
-      }
-      return new Float32Array(samples);
-    }
-  }
-
-  private async handleTranscription(event: Electron.IpcMainInvokeEvent, audioPath: string) {
+  private async processAudio(event: Electron.IpcMainInvokeEvent, audioPath: string) {
     return new Promise((resolve, reject) => {
       // 创建音频处理 Worker
       const audioWorkerPath = path.join(__dirname, 'audioWorker.js');
@@ -151,7 +104,6 @@ class WhisperService {
             console.log('Worker log:', message.data);
             break;
           case 'complete':
-            // 发送音频数据到转录 Worker
             transcriptionWorker.postMessage({ audioArray: message.data });
             break;
           case 'error':
@@ -163,10 +115,17 @@ class WhisperService {
       transcriptionWorker.on('message', (message) => {
         switch (message.type) {
           case 'progress':
+            const { progress, currentTime, totalDuration, text } = message.data;
+            const progressPercent = typeof progress === 'number' && !isNaN(progress) ? Math.round(progress) : 0;
             event.sender.send('transcription-status', {
               status: 'transcribing',
-              message: '正在转录音频...',
-              progress: message.data
+              message: `正在转录音频... ${progressPercent}%`,
+              progress: {
+                percent: progressPercent,
+                currentTime,
+                totalDuration,
+                text
+              }
             });
             break;
           case 'complete':
@@ -252,54 +211,7 @@ class WhisperService {
 
   private setupIpcHandlers() {
     ipcMain.handle('transcribe-audio', async (event, input: { type: 'file' | 'url', path?: string, url?: string }) => {
-      let audioPath: string | null = null;
-      let retries = 3;
-
-      while (retries > 0) {
-        try {
-          if (!this.transcriber) {
-            event.sender.send('transcription-status', { status: 'initializing', message: '正在初始化模型...' });
-            await this.initializeWhisper();
-          }
-
-          if (input.type === 'file' && input.path) {
-            audioPath = input.path;
-            return await this.handleTranscription(event, audioPath);
-          } else if (input.type === 'url' && input.url) {
-            event.sender.send('transcription-status', { status: 'downloading', message: '正在下载音频...' });
-            const videoDownloader = new VideoDownloader();
-            audioPath = await videoDownloader.downloadAudio(input.url);
-            const result = await this.handleTranscription(event, audioPath);
-            await videoDownloader.cleanup(audioPath);
-            return result;
-          } else {
-            throw new Error('无效的输入');
-          }
-        } catch (error) {
-          console.error(`转换失败 (剩余重试次数: ${retries - 1}):`, error);
-          event.sender.send('transcription-status', {
-            status: 'error',
-            message: `转换失败: ${error instanceof Error ? error.message : '未知错误'}`
-          });
-
-          if (audioPath && input.type === 'url') {
-            const videoDownloader = new VideoDownloader();
-            await videoDownloader.cleanup(audioPath);
-          }
-
-          retries--;
-          if (retries === 0) {
-            return {
-              success: false,
-              error: error instanceof Error ? error.message : '转换失败'
-            };
-          }
-
-          // 重置 transcriber，下次重试时重新初始化
-          this.transcriber = null;
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
+      return await this.handleTranscription(event, input);
     });
   }
 }

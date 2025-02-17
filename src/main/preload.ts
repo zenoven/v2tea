@@ -6,6 +6,12 @@ try {
       invoke: (channel: string, data: any) => {
         return ipcRenderer.invoke(channel, data);
       }
+    },
+    on: (channel: string, callback: (...args: any[]) => void) => {
+      ipcRenderer.on(channel, (_, ...args) => callback(...args));
+      return () => {
+        ipcRenderer.removeListener(channel, callback);
+      };
     }
   };
 

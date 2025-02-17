@@ -8,6 +8,14 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
+// 定义 WAV 格式接口
+interface WavFormat {
+  sampleRate: number;
+  bitsPerSample: number;
+  numChannels: number;
+  audioFormat: number;
+}
+
 async function processAudio() {
   try {
     const { audioPath } = workerData;
@@ -27,11 +35,12 @@ async function processAudio() {
     const wav = new WaveFile(audioData);
 
     // 获取音频格式信息
+    const format = wav.fmt as WavFormat;
     console.log('音频格式:', {
-      sampleRate: wav.fmt.sampleRate,
-      bitsPerSample: wav.fmt.bitsPerSample,
-      numChannels: wav.fmt.numChannels,
-      audioFormat: wav.fmt.audioFormat
+      sampleRate: format.sampleRate,
+      bitsPerSample: format.bitsPerSample,
+      numChannels: format.numChannels,
+      audioFormat: format.audioFormat
     });
 
     // 获取音频样本

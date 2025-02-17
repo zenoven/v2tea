@@ -1,34 +1,8 @@
-import { parentPort, workerData } from 'worker_threads';
+import { parentPort } from 'worker_threads';
 const transformers = require('@xenova/transformers');
 const { pipeline } = transformers;
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { WaveFile } from 'wavefile';
-
-const execAsync = promisify(exec);
 
 let transcriber: any = null;
-
-// 保存音频数据为文件
-async function saveAudioData(audioArray: Float32Array) {
-  const tempDir = os.tmpdir();
-  const wavPath = path.join(tempDir, `debug_audio_${Date.now()}.wav`);
-
-  // 创建 WAV 文件
-  const wav = new WaveFile();
-
-  // 设置 WAV 文件格式
-  wav.fromScratch(1, 16000, '32f', audioArray);
-
-  // 保存 WAV 文件
-  await fs.promises.writeFile(wavPath, wav.toBuffer());
-  console.log('保存 WAV 文件到:', wavPath);
-
-  return { wavPath };
-}
 
 async function initializeWhisper() {
   console.log('开始初始化 Whisper 模型...');
@@ -54,77 +28,101 @@ async function transcribe(audioArray: Float32Array) {
     await initializeWhisper();
   }
 
-  console.log('音频数据长度:', audioArray.length);
-  console.log('开始转录...');
+  // 计算总时长（秒）
+  const totalDuration = Math.max(1, audioArray.length / 16000);
+  console.log('音频总时长:', totalDuration, '秒');
 
-  // 检查音频数据
-  if (audioArray.length === 0) {
-    throw new Error('音频数据为空');
-  }
-
-  // 保存音频数据用于调试
-  try {
-    const { wavPath } = await saveAudioData(audioArray);
-    console.log('已保存音频数据，可以检查文件:', wavPath);
-  } catch (error) {
-    console.error('保存音频数据失败:', error);
-  }
-
-  const result = await transcriber(audioArray, {
-    language: 'chinese',
-    task: 'transcribe',
-    // 基本参数
-    chunk_length_s: 30,
-    stride_length_s: 5,
-    return_timestamps: true,
-    // 简化解码参数
-    temperature: 0,
-    no_speech_threshold: 0.3,
-    condition_on_previous_text: true,
-    // 移除可能导致问题的参数
-    beam_size: 5
+  // 发送初始进度
+  parentPort?.postMessage({
+    type: 'progress',
+    data: {
+      progress: 0,
+      currentTime: 0,
+      totalDuration: Math.floor(totalDuration),
+      text: '开始转录...'
+    }
   });
 
-  console.log('原始转录结果:', result);
+  // 分块处理音频
+  const chunkSize = 16000 * 30; // 30秒一块
+  const overlap = 16000 * 5;    // 5秒重叠
+  let processedSamples = 0;
+  let allSegments: any[] = [];
 
-  if (!result || !result.text) {
-    throw new Error('转录结果为空');
+  while (processedSamples < audioArray.length) {
+    // 计算当前块的范围
+    const start = Math.max(0, processedSamples - overlap);
+    const end = Math.min(audioArray.length, start + chunkSize);
+    const chunk = audioArray.slice(start, end);
+
+    // 处理当前块
+    const result = await transcriber(chunk, {
+      language: 'chinese',
+      task: 'transcribe',
+      return_timestamps: true,
+      temperature: 0,
+      no_speech_threshold: 0.3,
+      condition_on_previous_text: true,
+      beam_size: 5
+    });
+
+    if (result.chunks) {
+      // 调整时间戳并添加到结果中
+      const adjustedChunks = result.chunks.map((c: any) => ({
+        ...c,
+        time: {
+          start: (c.time?.start || 0) + (start / 16000),
+          end: (c.time?.end || 0) + (start / 16000)
+        }
+      }));
+      allSegments.push(...adjustedChunks);
+    }
+
+    // 更新进度
+    processedSamples = end;
+    const progress = Math.min(100, (processedSamples / audioArray.length) * 100);
+
+    // 发送进度更新
+    parentPort?.postMessage({
+      type: 'progress',
+      data: {
+        progress: Math.floor(progress),
+        currentTime: Math.floor(processedSamples / 16000),
+        totalDuration: Math.floor(totalDuration),
+        text: allSegments
+          .sort((a, b) => (a.time.start - b.time.start))
+          .map(s => s.text?.trim())
+          .filter(Boolean)
+          .join(' ')
+      }
+    });
   }
 
-  // 后处理结果
-  if (result.text) {
-    // 移除重复的文本
-    let processedText = result.text
-      .trim()
-      .replace(/\s+/g, ' ')
-      // 移除连续重复的字符
-      .replace(/(.)\1{2,}/g, '$1$1')
-      // 移除重复的短语
-      .replace(/(.{2,})\1+/g, '$1')
-      // 规范化标点符号
-      .replace(/[，。！？；：、]{2,}/g, (match: string) => match[0]);
+  // 合并所有片段
+  const finalText = allSegments
+    .sort((a, b) => (a.time.start - b.time.start))
+    .map(s => s.text?.trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/(.)\1{2,}/g, '$1$1')
+    .replace(/(.{2,})\1+/g, '$1')
+    .replace(/[，。！？；：、]{2,}/g, (match: string) => match[0]);
 
-    // 更新结果
-    result.text = processedText;
-  }
-
-  return result;
+  return {
+    text: finalText,
+    chunks: allSegments.sort((a, b) => (a.time.start - b.time.start))
+  };
 }
 
 parentPort?.on('message', async (message) => {
   try {
-    console.log('开始处理音频数据...');
     if (!message.audioArray) {
       throw new Error('未收到音频数据');
     }
 
     const result = await transcribe(message.audioArray);
-    console.log('转录完成，结果:', {
-      textLength: result.text.length,
-      hasChunks: !!result.chunks,
-      text: result.text
-    });
-
     parentPort?.postMessage({ type: 'complete', data: result });
   } catch (error) {
     console.error('转录失败:', error);
