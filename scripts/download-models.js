@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { fetch, ProxyAgent } = require('undici');
+const { pipeline } = require('@xenova/transformers');
 
 const MODEL_FILES = [
   {
@@ -140,6 +141,23 @@ if (require.main === module) {
     downloadModels();
   }
 }
+
+async function downloadModel(modelName) {
+  console.log(`开始下载模型: ${modelName}`);
+  await pipeline('automatic-speech-recognition', `Xenova/${modelName}`, {
+    revision: 'main',
+    cache_dir: './models',
+    local: false,
+    progress_callback: (progress) => {
+      console.log('下载进度:', progress);
+    }
+  });
+  console.log(`模型 ${modelName} 下载完成`);
+}
+
+// 下载基础模型
+downloadModel('whisper-base')
+  .catch(console.error);
 
 module.exports = {
   downloadModels,

@@ -11,7 +11,8 @@
     "build:electron": "webpack --config webpack.electron.config.js",
     "build:react": "webpack --config webpack.react.config.js",
     "start": "electron .",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "download-models": "node scripts/download-models.js"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",

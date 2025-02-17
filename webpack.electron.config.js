@@ -6,7 +6,8 @@ module.exports = {
   entry: {
     main: './src/main/main.ts',
     preload: './src/main/preload.ts',
-    audioWorker: './src/main/audioWorker.ts'
+    audioWorker: './src/main/audioWorker.ts',
+    transcriptionWorker: './src/main/transcriptionWorker.ts'
   },
   target: 'electron-main',
   output: {
@@ -23,7 +24,7 @@ module.exports = {
         use: {
           loader: 'ts-loader',
           options: {
-            transpileOnly: true // 加快编译速度
+            transpileOnly: true
           }
         }
       }
@@ -56,6 +57,11 @@ module.exports = {
   },
   experiments: {
     topLevelAwait: true
+  },
+  watchOptions: {
+    ignored: /node_modules/,
+    aggregateTimeout: 300,
+    poll: 1000
   },
   plugins: [
     {

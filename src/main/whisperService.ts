@@ -1,4 +1,5 @@
-import { pipeline, env } from '@xenova/transformers';
+const transformers = require('@xenova/transformers');
+const { pipeline, env } = transformers;
 import { ipcMain } from 'electron';
 import Store from 'electron-store';
 import { VideoDownloader } from './videoDownloader';
@@ -31,6 +32,13 @@ if (proxyUrl) {
 }
 
 const store = new Store();
+
+interface WavFormat {
+  sampleRate: number;
+  bitsPerSample: number;
+  numChannels: number;
+  audioFormat: number;
+}
 
 class WhisperService {
   private transcriber: any = null;
@@ -68,7 +76,13 @@ class WhisperService {
     const wav = new WaveFile(audioData);
 
     // 获取格式信息
-    const format = wav.fmt as { sampleRate: number };
+    const format = wav.fmt as WavFormat;
+    console.log('音频格式:', {
+      sampleRate: format.sampleRate,
+      bitsPerSample: format.bitsPerSample,
+      numChannels: format.numChannels,
+      format: format.audioFormat
+    });
 
     // 确保采样率是 16000Hz
     if (format.sampleRate !== 16000) {
@@ -77,30 +91,58 @@ class WhisperService {
 
     // 获取音频数据
     const samples = wav.getSamples();
+
     if (Array.isArray(samples)) {
       // 如果是多声道，只取第一个声道
-      return new Float32Array(samples[0]);
+      const channelData = samples[0];
+      console.log('音频数据范围:', {
+        min: Math.min(...channelData),
+        max: Math.max(...channelData)
+      });
+
+      // 如果数据不是 32 位浮点数，需要进行归一化
+      if (format.bitsPerSample !== 32) {
+        const maxValue = Math.pow(2, format.bitsPerSample - 1) - 1;
+        const float32Data = new Float32Array(channelData.length);
+        for (let i = 0; i < channelData.length; i++) {
+          float32Data[i] = channelData[i] / maxValue;
+        }
+        return float32Data;
+      }
+      return new Float32Array(channelData);
     } else {
       // 单声道
+      console.log('音频数据范围:', {
+        min: Math.min(...samples),
+        max: Math.max(...samples)
+      });
+
+      // 如果数据不是 32 位浮点数，需要进行归一化
+      if (format.bitsPerSample !== 32) {
+        const maxValue = Math.pow(2, format.bitsPerSample - 1) - 1;
+        const float32Data = new Float32Array(samples.length);
+        for (let i = 0; i < samples.length; i++) {
+          float32Data[i] = samples[i] / maxValue;
+        }
+        return float32Data;
+      }
       return new Float32Array(samples);
     }
   }
 
   private async handleTranscription(event: Electron.IpcMainInvokeEvent, audioPath: string) {
-    if (!this.transcriber) {
-      throw new Error('Whisper 转录器未初始化');
-    }
-
     return new Promise((resolve, reject) => {
-      // 使用相对于 __dirname 的路径
-      const workerPath = path.join(__dirname, 'audioWorker.js');
-      console.log('Worker path:', workerPath);
-
-      const worker = new Worker(workerPath, {
+      // 创建音频处理 Worker
+      const audioWorkerPath = path.join(__dirname, 'audioWorker.js');
+      const audioWorker = new Worker(audioWorkerPath, {
         workerData: { audioPath }
       });
 
-      worker.on('message', async (message) => {
+      // 创建转录 Worker
+      const transcriptionWorkerPath = path.join(__dirname, 'transcriptionWorker.js');
+      const transcriptionWorker = new Worker(transcriptionWorkerPath);
+
+      audioWorker.on('message', async (message) => {
         switch (message.type) {
           case 'status':
             event.sender.send('transcription-status', message.data);
@@ -109,38 +151,8 @@ class WhisperService {
             console.log('Worker log:', message.data);
             break;
           case 'complete':
-            try {
-              // 发送状态更新
-              event.sender.send('transcription-status', {
-                status: 'transcribing',
-                message: '正在转录音频...'
-              });
-
-              // 使用转换后的音频数据
-              const result = await this.transcriber(message.data, {
-                language: 'chinese',
-                task: 'transcribe',
-                chunk_length_s: 30,
-                stride_length_s: 5,
-                return_timestamps: true,
-                temperature: 0,
-                no_speech_threshold: 0.6,
-                condition_on_previous_text: true
-              });
-
-              event.sender.send('transcription-status', {
-                status: 'completed',
-                message: '转录完成'
-              });
-
-              resolve({
-                success: true,
-                text: result.text,
-                segments: result.chunks
-              });
-            } catch (error) {
-              reject(error);
-            }
+            // 发送音频数据到转录 Worker
+            transcriptionWorker.postMessage({ audioArray: message.data });
             break;
           case 'error':
             reject(message.data);
@@ -148,10 +160,44 @@ class WhisperService {
         }
       });
 
-      worker.on('error', reject);
-      worker.on('exit', (code) => {
+      transcriptionWorker.on('message', (message) => {
+        switch (message.type) {
+          case 'progress':
+            event.sender.send('transcription-status', {
+              status: 'transcribing',
+              message: '正在转录音频...',
+              progress: message.data
+            });
+            break;
+          case 'complete':
+            event.sender.send('transcription-status', {
+              status: 'completed',
+              message: '转录完成'
+            });
+            resolve({
+              success: true,
+              text: message.data.text,
+              segments: message.data.chunks
+            });
+            break;
+          case 'error':
+            reject(message.data);
+            break;
+        }
+      });
+
+      audioWorker.on('error', reject);
+      transcriptionWorker.on('error', reject);
+
+      audioWorker.on('exit', (code) => {
         if (code !== 0) {
-          reject(new Error(`Worker stopped with exit code ${code}`));
+          reject(new Error(`Audio worker stopped with exit code ${code}`));
+        }
+      });
+
+      transcriptionWorker.on('exit', (code) => {
+        if (code !== 0) {
+          reject(new Error(`Transcription worker stopped with exit code ${code}`));
         }
       });
     });
@@ -175,10 +221,10 @@ class WhisperService {
 
         const pipe = await pipeline(
           'automatic-speech-recognition',
-          'Xenova/whisper-base',
+          'Xenova/whisper-medium',
           {
             revision: 'main',
-            quantized: false,
+            quantized: true,
             progress_callback: (progress: any) => {
               console.log('模型加载进度:', progress);
             }
