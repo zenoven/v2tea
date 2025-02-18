@@ -1,8 +1,10 @@
 const path = require('path');
 const { spawn } = require('child_process');
 
+const isDevelopment = process.env.NODE_ENV === 'development';
+
 module.exports = {
-  mode: process.env.NODE_ENV,
+  mode: process.env.NODE_ENV || 'production',
   entry: {
     main: './src/main/main.ts',
     preload: './src/main/preload.ts',
@@ -11,7 +13,7 @@ module.exports = {
   },
   target: 'electron-main',
   output: {
-    path: path.join(__dirname, 'dist', 'main'),
+    path: path.resolve(__dirname, 'dist/main'),
     filename: '[name].js',
     globalObject: 'this',
     chunkFormat: 'commonjs'
@@ -22,10 +24,7 @@ module.exports = {
         test: /\.ts$/,
         exclude: /node_modules/,
         use: {
-          loader: 'ts-loader',
-          options: {
-            transpileOnly: true
-          }
+          loader: 'ts-loader'
         }
       }
     ]
@@ -58,13 +57,8 @@ module.exports = {
   experiments: {
     topLevelAwait: true
   },
-  watchOptions: {
-    ignored: /node_modules/,
-    aggregateTimeout: 300,
-    poll: 1000
-  },
   plugins: [
-    {
+    ...(isDevelopment ? [{
       apply: (compiler) => {
         let electronProcess = null;
         compiler.hooks.afterEmit.tap('AfterEmitPlugin', () => {
@@ -81,6 +75,6 @@ module.exports = {
           }
         });
       }
-    }
+    }] : [])
   ]
 };
