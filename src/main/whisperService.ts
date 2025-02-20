@@ -70,9 +70,14 @@ interface IOptions {
 }
 
 class WhisperService {
+  private static instance: WhisperService | null = null;
   private readonly modelName: string = 'medium';
 
   constructor() {
+    if (WhisperService.instance) {
+      return WhisperService.instance;
+    }
+    WhisperService.instance = this;
     // 设置 shelljs 的 execPath
     shell.config.execPath = process.execPath;
     this.setupIpcHandlers();
@@ -206,6 +211,21 @@ class WhisperService {
     ipcMain.handle('transcribe-audio', async (event, input) => {
       return await this.handleTranscription(event, input);
     });
+  }
+
+  async transcribe(audioPath: string): Promise<string> {
+    try {
+      const text = await nodewhisper(audioPath, {
+        modelName: this.modelName,
+        whisperOptions: {
+          language: 'zh'
+        }
+      });
+      return text;
+    } catch (error) {
+      console.error('转录失败:', error);
+      throw error;
+    }
   }
 }
 

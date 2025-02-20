@@ -32,17 +32,6 @@ async function transcribe(audioArray: Float32Array) {
   const totalDuration = Math.max(1, audioArray.length / 16000);
   console.log('音频总时长:', totalDuration, '秒');
 
-  // 发送初始进度
-  parentPort?.postMessage({
-    type: 'progress',
-    data: {
-      progress: 0,
-      currentTime: 0,
-      totalDuration: Math.floor(totalDuration),
-      text: '开始转录...'
-    }
-  });
-
   // 分块处理音频
   const chunkSize = 16000 * 30; // 30秒一块
   const overlap = 16000 * 5;    // 5秒重叠
@@ -81,21 +70,6 @@ async function transcribe(audioArray: Float32Array) {
     // 更新进度
     processedSamples = end;
     const progress = Math.min(100, (processedSamples / audioArray.length) * 100);
-
-    // 发送进度更新
-    parentPort?.postMessage({
-      type: 'progress',
-      data: {
-        progress: Math.floor(progress),
-        currentTime: Math.floor(processedSamples / 16000),
-        totalDuration: Math.floor(totalDuration),
-        text: allSegments
-          .sort((a, b) => (a.time.start - b.time.start))
-          .map(s => s.text?.trim())
-          .filter(Boolean)
-          .join(' ')
-      }
-    });
   }
 
   // 合并所有片段
@@ -123,7 +97,13 @@ parentPort?.on('message', async (message) => {
     }
 
     const result = await transcribe(message.audioArray);
-    parentPort?.postMessage({ type: 'complete', data: result });
+    parentPort?.postMessage({
+      type: 'complete',
+      data: {
+        success: true,
+        text: result.text
+      }
+    });
   } catch (error) {
     console.error('转录失败:', error);
     parentPort?.postMessage({

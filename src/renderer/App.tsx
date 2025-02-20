@@ -31,25 +31,7 @@ const waitForElectron = (): Promise<typeof window.electron> => {
 interface TranscriptionResult {
   success: boolean;
   text?: string;
-  segments?: Array<{
-    text: string;
-    start: number;
-    end: number;
-  }>;
   error?: string;
-}
-
-interface TranscriptionProgress {
-  percent: number;
-  currentTime: number;
-  totalDuration: number;
-  text: string;
-}
-
-interface TranscriptionStatus {
-  status: 'initializing' | 'converting' | 'transcribing' | 'completed' | 'error' | 'downloading';
-  message: string;
-  progress?: TranscriptionProgress;
 }
 
 const App: React.FC = () => {
@@ -59,24 +41,11 @@ const App: React.FC = () => {
   const [transcription, setTranscription] = useState<string>('');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState<string>('');
-  const [status, setStatus] = useState<TranscriptionStatus | null>(null);
 
   useEffect(() => {
     waitForElectron().then((electron) => {
       setIpcRenderer(electron.ipcRenderer);
     });
-  }, []);
-
-  useEffect(() => {
-    // 监听转录状态更新
-    const cleanup = window.electron.on('transcription-status', (newStatus: TranscriptionStatus) => {
-      setStatus(newStatus);
-    });
-
-    // 清理监听器
-    return () => {
-      if (cleanup) cleanup();
-    };
   }, []);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -85,6 +54,10 @@ const App: React.FC = () => {
       const selectedFile = files[0];
       // 获取文件的真实路径
       const filePath = (selectedFile as any).path || selectedFile.name;
+      console.log('file:', {
+        ...selectedFile,
+        path: filePath
+      });
       setFile({
         ...selectedFile,
         path: filePath
@@ -146,59 +119,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 格式化时间
-  const formatTime = (seconds: number | null) => {
-    if (seconds === null || isNaN(seconds)) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // 渲染进度条和实时文本
-  const renderProgress = () => {
-    if (!status?.progress) {
-      return (
-        <div className="progress-container">
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: '0%' }} />
-          </div>
-          <div className="progress-info">
-            <div className="time-info">0:00 / 0:00</div>
-          </div>
-          <div className="current-text">
-            准备转录...
-          </div>
-        </div>
-      );
-    }
-
-    const { percent = 0, currentTime = 0, totalDuration = 0, text = '' } = status.progress;
-
-    // 确保所有数值都是有效的
-    const progress = !isNaN(percent) ? Math.min(100, Math.max(0, percent)) : 0;
-    const current = !isNaN(currentTime) ? Math.max(0, currentTime) : 0;
-    const total = !isNaN(totalDuration) ? Math.max(1, totalDuration) : 1;
-
-    return (
-      <div className="progress-container">
-        <div className="progress-bar">
-          <div
-            className="progress-fill"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-        <div className="progress-info">
-          <div className="time-info">{formatTime(current)} / {formatTime(total)}</div>
-        </div>
-        {text && (
-          <div className="current-text">
-            当前识别文本: {text}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div className="container">
       <h1>视频转文本</h1>
@@ -231,7 +151,7 @@ const App: React.FC = () => {
 
       {(file || url) && (
         <div style={{ marginBottom: '20px' }}>
-          <p>已选择：{file ? file.name : url}</p>
+          <p>已选择：{file ? file.path : url}</p>
           <button
             onClick={handleTranscribe}
             disabled={isTranscribing}
@@ -244,13 +164,6 @@ const App: React.FC = () => {
       {error && (
         <div style={{ color: 'red', marginBottom: '20px' }}>
           {error}
-        </div>
-      )}
-
-      {status && (
-        <div className="status">
-          <p>{status.message}</p>
-          {status.status === 'transcribing' && renderProgress()}
         </div>
       )}
 
