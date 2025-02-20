@@ -15,8 +15,7 @@
     "build:electron": "cross-env NODE_ENV=production webpack --config webpack.electron.config.js --no-watch",
     "build:react": "cross-env NODE_ENV=production webpack --config webpack.react.config.js --no-dev-server",
     "start": "electron .",
-    "postinstall": "electron-builder install-app-deps",
-    "download-models": "node scripts/download-models.js",
+    "postinstall": "npx nodejs-whisper download medium",
     "postbuild": "electron-builder",
     "build:mac": "cross-env NODE_ENV=production npm run build -- --mac",
     "build:win": "cross-env NODE_ENV=production npm run build -- --win",
@@ -27,13 +26,17 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@xenova/transformers": "^2.15.0",
+    "nodejs-whisper": "^0.2.6",
+    "fluent-ffmpeg": "^2.1.2",
+    "ffmpeg-static": "^5.2.0",
     "axios": "^1.7.9",
     "electron-is-dev": "^2.0.0",
     "electron-store": "^8.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "wavefile": "^11.0.0",
-    "youtube-dl-exec": "^2.5.8"
+    "youtube-dl-exec": "^2.5.8",
+    "@types/fluent-ffmpeg": "^2.1.24"
   },
   "devDependencies": {
     "@types/node": "^18.19.76",
@@ -76,6 +79,14 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "node_modules/fluent-ffmpeg",
+        "to": "node_modules/fluent-ffmpeg"
+      },
+      {
+        "from": "node_modules/ffmpeg-static",
+        "to": "node_modules/ffmpeg-static"
       }
     ],
     "mac": {

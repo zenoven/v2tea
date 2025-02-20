@@ -1,5 +1,3 @@
-const transformers = require('@xenova/transformers');
-const { pipeline, env } = transformers;
 import { ipcMain } from 'electron';
 import Store from 'electron-store';
 import { VideoDownloader } from './videoDownloader';
@@ -7,9 +5,7 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import * as path from 'path';
 import { Worker } from 'worker_threads';
 import * as fs from 'fs';
-
-// 设置环境变量，强制使用 onnxruntime-node
-process.env.TRANSFORMERS_JS_BACKEND = 'onnxruntime-node';
+import { Whisper } from 'nodejs-whisper';
 
 // 获取系统代理设置
 function getSystemProxy() {
@@ -27,12 +23,32 @@ if (proxyUrl) {
 
 const store = new Store();
 
+// 添加类型声明
+declare module 'nodejs-whisper' {
+  export class Whisper {
+    constructor(options: { modelPath: string; threads?: number });
+    transcribe(audio: ArrayBuffer, options: {
+      language?: string;
+      progressCallback?: (progress: number) => void;
+    }): Promise<{
+      text: string;
+      segments: Array<{
+        text: string;
+        start: number;
+        end: number;
+      }>;
+    }>;
+  }
+}
+
 class WhisperService {
-  private transcriber: any = null;
+  private whisperInstance: Whisper | null = null;
   private isInitializing: boolean = false;
   private initPromise: Promise<void> | null = null;
+  private readonly modelPath: string;
 
   constructor() {
+    this.modelPath = path.join(process.cwd(), 'models/ggml-medium.bin');
     this.setupIpcHandlers();
   }
 
@@ -49,14 +65,12 @@ class WhisperService {
         const videoDownloader = new VideoDownloader();
         try {
           audioPath = await videoDownloader.downloadAudio(input.url);
-          // 验证文件是否存在
           if (!fs.existsSync(audioPath)) {
             throw new Error('下载的音频文件未找到');
           }
 
           const result = await this.processAudio(event, audioPath);
 
-          // 清理临时文件
           await videoDownloader.cleanup(audioPath);
           return result;
         } catch (error) {
@@ -85,85 +99,90 @@ class WhisperService {
 
   private async processAudio(event: Electron.IpcMainInvokeEvent, audioPath: string) {
     return new Promise((resolve, reject) => {
-      // 创建音频处理 Worker
-      const audioWorkerPath = path.join(__dirname, 'audioWorker.js');
-      const audioWorker = new Worker(audioWorkerPath, {
+      const audioWorker = new Worker(path.join(__dirname, 'audioWorker.js'), {
         workerData: { audioPath }
       });
 
-      // 创建转录 Worker
-      const transcriptionWorkerPath = path.join(__dirname, 'transcriptionWorker.js');
-      const transcriptionWorker = new Worker(transcriptionWorkerPath);
+      let audioData: Float32Array | null = null;
 
       audioWorker.on('message', async (message) => {
-        switch (message.type) {
-          case 'status':
-            event.sender.send('transcription-status', message.data);
-            break;
-          case 'log':
-            console.log('Worker log:', message.data);
-            break;
-          case 'complete':
-            transcriptionWorker.postMessage({ audioArray: message.data });
-            break;
-          case 'error':
-            reject(message.data);
-            break;
-        }
-      });
-
-      transcriptionWorker.on('message', (message) => {
-        switch (message.type) {
-          case 'progress':
-            const { progress, currentTime, totalDuration, text } = message.data;
-            const progressPercent = typeof progress === 'number' && !isNaN(progress) ? Math.round(progress) : 0;
-            event.sender.send('transcription-status', {
-              status: 'transcribing',
-              message: `正在转录音频... ${progressPercent}%`,
-              progress: {
-                percent: progressPercent,
-                currentTime,
-                totalDuration,
-                text
+        try {
+          switch (message.type) {
+            case 'status':
+              event.sender.send('transcription-status', message.data);
+              break;
+            case 'complete':
+              audioData = message.data;
+              if (!audioData) {
+                throw new Error('音频数据为空');
               }
-            });
-            break;
-          case 'complete':
-            event.sender.send('transcription-status', {
-              status: 'completed',
-              message: '转录完成'
-            });
-            resolve({
-              success: true,
-              text: message.data.text,
-              segments: message.data.chunks
-            });
-            break;
-          case 'error':
-            reject(message.data);
-            break;
+              await this.transcribeAudio(event, audioData, resolve, reject);
+              break;
+            case 'error':
+              reject(message.data);
+              break;
+          }
+        } catch (error) {
+          reject(error);
         }
       });
 
       audioWorker.on('error', reject);
-      transcriptionWorker.on('error', reject);
-
       audioWorker.on('exit', (code) => {
         if (code !== 0) {
           reject(new Error(`Audio worker stopped with exit code ${code}`));
         }
       });
-
-      transcriptionWorker.on('exit', (code) => {
-        if (code !== 0) {
-          reject(new Error(`Transcription worker stopped with exit code ${code}`));
-        }
-      });
     });
   }
 
+  private async transcribeAudio(
+    event: Electron.IpcMainInvokeEvent,
+    audioData: Float32Array,
+    resolve: (value: any) => void,
+    reject: (reason?: any) => void
+  ) {
+    try {
+      await this.initializeWhisper();
+      if (!this.whisperInstance) {
+        throw new Error('Whisper 实例未初始化');
+      }
+
+      event.sender.send('transcription-status', {
+        status: 'transcribing',
+        message: '正在转录音频...'
+      });
+
+      const result = await this.whisperInstance.transcribe(audioData.buffer, {
+        language: 'zh',
+        progressCallback: (progress: number) => {
+          event.sender.send('transcription-status', {
+            status: 'transcribing',
+            message: `正在转录音频... ${Math.round(progress * 100)}%`,
+            progress: {
+              percent: Math.round(progress * 100)
+            }
+          });
+        }
+      });
+
+      event.sender.send('transcription-status', {
+        status: 'completed',
+        message: '转录完成'
+      });
+
+      resolve({
+        success: true,
+        text: result.text,
+        segments: result.segments
+      });
+    } catch (error) {
+      reject(error);
+    }
+  }
+
   private async initializeWhisper() {
-    if (this.transcriber) {
+    if (this.whisperInstance) {
       return;
     }
 
@@ -178,30 +197,21 @@ class WhisperService {
       this.initPromise = (async () => {
         console.log('开始初始化 Whisper 模型...');
 
-        const pipe = await pipeline(
-          'automatic-speech-recognition',
-          'Xenova/whisper-medium',
-          {
-            revision: 'main',
-            quantized: true,
-            progress_callback: (progress: any) => {
-              console.log('模型加载进度:', progress);
-            }
-          }
-        );
-
-        if (typeof pipe !== 'function') {
-          throw new Error('Pipeline 初始化失败: 返回值不是函数');
+        if (!fs.existsSync(this.modelPath)) {
+          throw new Error('模型文件不存在，请先运行 npm install 下载模型');
         }
 
-        this.transcriber = pipe;
+        this.whisperInstance = new Whisper({
+          modelPath: this.modelPath,
+          threads: 4
+        });
         console.log('Whisper 模型初始化成功');
       })();
 
       await this.initPromise;
     } catch (error) {
       console.error('Whisper 初始化失败:', error);
-      this.transcriber = null;
+      this.whisperInstance = null;
       this.initPromise = null;
       throw error;
     } finally {
@@ -210,7 +220,7 @@ class WhisperService {
   }
 
   private setupIpcHandlers() {
-    ipcMain.handle('transcribe-audio', async (event, input: { type: 'file' | 'url', path?: string, url?: string }) => {
+    ipcMain.handle('transcribe-audio', async (event, input) => {
       return await this.handleTranscription(event, input);
     });
   }

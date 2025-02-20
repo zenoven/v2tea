@@ -10,7 +10,11 @@
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "jsx": "react",
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "allowSyntheticDefaultImports": true,
+    "types": [
+      "node"
+    ]
   },
   "include": [
     "src/**/*"
