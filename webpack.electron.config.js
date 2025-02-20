@@ -45,7 +45,9 @@ module.exports = {
     '@ffmpeg/ffmpeg': 'commonjs @ffmpeg/ffmpeg',
     '@ffmpeg/util': 'commonjs @ffmpeg/util',
     'onnxruntime-node': 'commonjs2 onnxruntime-node',
-    'sharp': 'commonjs2 sharp'
+    'sharp': 'commonjs2 sharp',
+    'fluent-ffmpeg': 'commonjs2 fluent-ffmpeg',
+    'ffmpeg-static': 'commonjs2 ffmpeg-static'
   },
   node: {
     __dirname: false,

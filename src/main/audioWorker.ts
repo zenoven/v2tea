@@ -3,10 +3,14 @@ import { WaveFile } from 'wavefile';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
 
-const execAsync = promisify(exec);
+// 设置 ffmpeg 路径
+if (!ffmpegStatic) {
+  throw new Error('找不到 ffmpeg');
+}
+ffmpeg.setFfmpegPath(ffmpegStatic);
 
 // 定义 WAV 格式接口
 interface WavFormat {
@@ -24,7 +28,6 @@ async function processAudio() {
       throw new Error('未提供音频文件路径');
     }
 
-    // 检查文件是否存在
     if (!fs.existsSync(audioPath)) {
       throw new Error(`音频文件不存在: ${audioPath}`);
     }
@@ -34,10 +37,23 @@ async function processAudio() {
 
     // 使用 FFmpeg 转换为 16kHz, 16位 PCM WAV
     const tempWavPath = path.join(os.tmpdir(), `temp_${Date.now()}.wav`);
-    const ffmpegCommand = `ffmpeg -i "${audioPath}" -ar 16000 -ac 1 -c:a pcm_s16le -y "${tempWavPath}"`;
 
-    console.log('执行 FFmpeg 命令:', ffmpegCommand);
-    await execAsync(ffmpegCommand);
+    await new Promise((resolve, reject) => {
+      ffmpeg(audioPath)
+        .toFormat('wav')
+        .audioFrequency(16000)
+        .audioChannels(1)
+        .audioCodec('pcm_s16le')
+        .on('error', (err) => {
+          console.error('FFmpeg 错误:', err);
+          reject(err);
+        })
+        .on('end', () => {
+          console.log('FFmpeg 转换完成');
+          resolve(null);
+        })
+        .save(tempWavPath);
+    });
 
     // 读取转换后的 WAV 文件
     const audioData = await fs.promises.readFile(tempWavPath);
