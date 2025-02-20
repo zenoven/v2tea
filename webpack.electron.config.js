@@ -47,7 +47,9 @@ module.exports = {
     'onnxruntime-node': 'commonjs2 onnxruntime-node',
     'sharp': 'commonjs2 sharp',
     'fluent-ffmpeg': 'commonjs2 fluent-ffmpeg',
-    'ffmpeg-static': 'commonjs2 ffmpeg-static'
+    'ffmpeg-static': 'commonjs2 ffmpeg-static',
+    'nodejs-whisper': 'commonjs2 nodejs-whisper',
+    'child_process': 'commonjs2 child_process'
   },
   node: {
     __dirname: false,

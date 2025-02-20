@@ -15,7 +15,7 @@
     "build:electron": "cross-env NODE_ENV=production webpack --config webpack.electron.config.js --no-watch",
     "build:react": "cross-env NODE_ENV=production webpack --config webpack.react.config.js --no-dev-server",
     "start": "electron .",
-    "postinstall": "npx nodejs-whisper download medium",
+    "postinstall": "cd node_modules/nodejs-whisper && git submodule update --init --recursive && cd cpp/whisper.cpp && cmake -B build && cd build && make && cd ../../../../ && npx nodejs-whisper download medium",
     "postbuild": "electron-builder",
     "build:mac": "cross-env NODE_ENV=production npm run build -- --mac",
     "build:win": "cross-env NODE_ENV=production npm run build -- --win",
@@ -60,7 +60,8 @@
     "webpack": "^5.79.0",
     "webpack-cli": "^5.0.1",
     "webpack-dev-server": "^4.13.3",
-    "rimraf": "^5.0.1"
+    "rimraf": "^5.0.1",
+    "@types/shelljs": "^0.8.12"
   },
   "build": {
     "files": [
@@ -87,6 +88,15 @@
       {
         "from": "node_modules/ffmpeg-static",
         "to": "node_modules/ffmpeg-static"
+      },
+      {
+        "from": "node_modules/nodejs-whisper",
+        "to": "node_modules/nodejs-whisper",
+        "filter": [
+          "**/*",
+          "cpp/whisper.cpp/main",
+          "cpp/whisper.cpp/stream"
+        ]
       }
     ],
     "mac": {

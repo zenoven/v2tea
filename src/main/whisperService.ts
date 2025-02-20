@@ -5,7 +5,12 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import * as path from 'path';
 import { Worker } from 'worker_threads';
 import * as fs from 'fs';
-import { Whisper } from 'nodejs-whisper';
+import { nodewhisper } from 'nodejs-whisper';
+import { app } from 'electron';
+import * as process from 'process';
+import * as shell from 'shelljs';
+import * as os from 'os';
+import { WaveFile } from 'wavefile';
 
 // 获取系统代理设置
 function getSystemProxy() {
@@ -23,33 +28,133 @@ if (proxyUrl) {
 
 const store = new Store();
 
-// 添加类型声明
-declare module 'nodejs-whisper' {
-  export class Whisper {
-    constructor(options: { modelPath: string; threads?: number });
-    transcribe(audio: ArrayBuffer, options: {
-      language?: string;
-      progressCallback?: (progress: number) => void;
-    }): Promise<{
-      text: string;
-      segments: Array<{
-        text: string;
-        start: number;
-        end: number;
-      }>;
-    }>;
-  }
+// 定义接口
+interface WhisperResult {
+  text: string;
+  segments: Array<{
+    id: number;
+    seek: number;
+    start: number;
+    end: number;
+    text: string;
+    tokens: number[];
+    temperature: number;
+    avg_logprob: number;
+    compression_ratio: number;
+    no_speech_prob: number;
+  }>;
+}
+
+interface WhisperOptions {
+  outputInText?: boolean;
+  outputInVtt?: boolean;
+  outputInSrt?: boolean;
+  outputInCsv?: boolean;
+  translateToEnglish?: boolean;
+  language?: string;
+  wordTimestamps?: boolean;
+  timestamps_length?: number;
+  splitOnWord?: boolean;
+}
+
+interface IOptions {
+  modelName: string;
+  verbose?: boolean;
+  removeWavFileAfterTranscription?: boolean;
+  withCuda?: boolean;
+  autoDownloadModelName?: string;
+  whisperOptions?: WhisperOptions;
+  config?: {
+    execPath?: string;
+  };
 }
 
 class WhisperService {
-  private whisperInstance: Whisper | null = null;
-  private isInitializing: boolean = false;
-  private initPromise: Promise<void> | null = null;
-  private readonly modelPath: string;
+  private readonly modelName: string = 'medium';
 
   constructor() {
-    this.modelPath = path.join(process.cwd(), 'models/ggml-medium.bin');
+    // 设置 shelljs 的 execPath
+    shell.config.execPath = process.execPath;
     this.setupIpcHandlers();
+  }
+
+  private async processAudio(event: Electron.IpcMainInvokeEvent, audioPath: string) {
+    try {
+      event.sender.send('transcription-status', {
+        status: 'transcribing',
+        message: '正在转录音频...'
+      });
+
+      // 先用 audioWorker 转换音频
+      const audioData = await new Promise<Float32Array>((resolve, reject) => {
+        const audioWorker = new Worker(path.join(__dirname, 'audioWorker.js'), {
+          workerData: { audioPath }
+        });
+
+        audioWorker.on('message', (message) => {
+          if (message.type === 'complete') {
+            resolve(message.data);
+          } else if (message.type === 'error') {
+            reject(message.data);
+          }
+        });
+
+        audioWorker.on('error', reject);
+      });
+
+      // 将 Float32Array 转换为 Int16Array
+      const int16Data = new Int16Array(audioData.length);
+      for (let i = 0; i < audioData.length; i++) {
+        // 将 [-1, 1] 范围转换为 [-32768, 32767]
+        const sample = Math.max(-1, Math.min(1, audioData[i]));
+        int16Data[i] = Math.round(sample * 32767);
+      }
+
+      // 将 Int16Array 保存为临时 WAV 文件
+      const tempWavPath = path.join(os.tmpdir(), `temp_${Date.now()}.wav`);
+      const wav = new WaveFile();
+      wav.fromScratch(1, 16000, '16', int16Data);  // 使用 16 位格式
+      await fs.promises.writeFile(tempWavPath, wav.toBuffer());
+
+      try {
+        // 使用 nodejs-whisper 处理转换后的 WAV 文件
+        const text = await nodewhisper(tempWavPath, {
+          modelName: this.modelName,
+          whisperOptions: {
+            language: 'zh'
+          }
+        });
+
+        // 直接使用文本输出
+        event.sender.send('transcription-status', {
+          status: 'completed',
+          message: '转录完成'
+        });
+
+        return {
+          success: true,
+          text: text,
+          segments: [{
+            id: 0,
+            seek: 0,
+            start: 0,
+            end: 0,
+            text: text,
+            tokens: [],
+            temperature: 0,
+            avg_logprob: 0,
+            compression_ratio: 0,
+            no_speech_prob: 0
+          }]
+        };
+      } finally {
+        // 清理临时文件
+        await fs.promises.unlink(tempWavPath).catch(console.error);
+      }
+    } catch (error) {
+      console.error('转录失败:', error);
+      throw error;
+    }
   }
 
   private async handleTranscription(event: Electron.IpcMainInvokeEvent, input: { type: 'file' | 'url', path?: string, url?: string }) {
@@ -94,128 +199,6 @@ class WhisperService {
         success: false,
         error: error instanceof Error ? error.message : '转换失败'
       };
-    }
-  }
-
-  private async processAudio(event: Electron.IpcMainInvokeEvent, audioPath: string) {
-    return new Promise((resolve, reject) => {
-      const audioWorker = new Worker(path.join(__dirname, 'audioWorker.js'), {
-        workerData: { audioPath }
-      });
-
-      let audioData: Float32Array | null = null;
-
-      audioWorker.on('message', async (message) => {
-        try {
-          switch (message.type) {
-            case 'status':
-              event.sender.send('transcription-status', message.data);
-              break;
-            case 'complete':
-              audioData = message.data;
-              if (!audioData) {
-                throw new Error('音频数据为空');
-              }
-              await this.transcribeAudio(event, audioData, resolve, reject);
-              break;
-            case 'error':
-              reject(message.data);
-              break;
-          }
-        } catch (error) {
-          reject(error);
-        }
-      });
-
-      audioWorker.on('error', reject);
-      audioWorker.on('exit', (code) => {
-        if (code !== 0) {
-          reject(new Error(`Audio worker stopped with exit code ${code}`));
-        }
-      });
-    });
-  }
-
-  private async transcribeAudio(
-    event: Electron.IpcMainInvokeEvent,
-    audioData: Float32Array,
-    resolve: (value: any) => void,
-    reject: (reason?: any) => void
-  ) {
-    try {
-      await this.initializeWhisper();
-      if (!this.whisperInstance) {
-        throw new Error('Whisper 实例未初始化');
-      }
-
-      event.sender.send('transcription-status', {
-        status: 'transcribing',
-        message: '正在转录音频...'
-      });
-
-      const result = await this.whisperInstance.transcribe(audioData.buffer, {
-        language: 'zh',
-        progressCallback: (progress: number) => {
-          event.sender.send('transcription-status', {
-            status: 'transcribing',
-            message: `正在转录音频... ${Math.round(progress * 100)}%`,
-            progress: {
-              percent: Math.round(progress * 100)
-            }
-          });
-        }
-      });
-
-      event.sender.send('transcription-status', {
-        status: 'completed',
-        message: '转录完成'
-      });
-
-      resolve({
-        success: true,
-        text: result.text,
-        segments: result.segments
-      });
-    } catch (error) {
-      reject(error);
-    }
-  }
-
-  private async initializeWhisper() {
-    if (this.whisperInstance) {
-      return;
-    }
-
-    if (this.isInitializing) {
-      console.log('等待 Whisper 初始化完成...');
-      await this.initPromise;
-      return;
-    }
-
-    try {
-      this.isInitializing = true;
-      this.initPromise = (async () => {
-        console.log('开始初始化 Whisper 模型...');
-
-        if (!fs.existsSync(this.modelPath)) {
-          throw new Error('模型文件不存在，请先运行 npm install 下载模型');
-        }
-
-        this.whisperInstance = new Whisper({
-          modelPath: this.modelPath,
-          threads: 4
-        });
-        console.log('Whisper 模型初始化成功');
-      })();
-
-      await this.initPromise;
-    } catch (error) {
-      console.error('Whisper 初始化失败:', error);
-      this.whisperInstance = null;
-      this.initPromise = null;
-      throw error;
-    } finally {
-      this.isInitializing = false;
     }
   }
 
