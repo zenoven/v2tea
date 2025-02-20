@@ -64,25 +64,10 @@ class MainWindow {
 
     // 修改路径检查顺序
     const possiblePaths = [
-      path.join(process.resourcesPath, 'app/dist/renderer/index.html'),
-      path.join(appPath, 'app/dist/renderer/index.html'),
-      path.join(appPath, 'dist/renderer/index.html'),
-      path.join(__dirname, '../renderer/index.html')
+      path.join(appPath, 'dist/renderer/index.html'),     // 开发环境路径
+      path.join(__dirname, '../renderer/index.html'),     // 生产环境路径
+      path.join(process.resourcesPath, 'app/dist/renderer/index.html'),  // 打包后路径
     ];
-
-    // 列出目录内容以便调试
-    for (const dir of [process.resourcesPath, appPath, path.dirname(__dirname)]) {
-      try {
-        console.log(`目录 ${dir} 内容:`, fs.readdirSync(dir));
-        // 如果是 app/dist 目录，也列出其子目录
-        if (fs.existsSync(path.join(dir, 'app/dist'))) {
-          console.log(`目录 ${path.join(dir, 'app/dist')} 内容:`,
-            fs.readdirSync(path.join(dir, 'app/dist')));
-        }
-      } catch (err) {
-        console.log(`无法读取目录 ${dir}:`, err);
-      }
-    }
 
     let htmlPath: string | null = null;
     for (const p of possiblePaths) {
@@ -95,9 +80,6 @@ class MainWindow {
 
     if (!htmlPath) {
       console.error('找不到 HTML 文件');
-      console.log('当前目录:', __dirname);
-      console.log('应用目录:', appPath);
-      console.log('资源目录:', process.resourcesPath);
       throw new Error('HTML file not found');
     }
 

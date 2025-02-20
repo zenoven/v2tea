@@ -2,16 +2,22 @@ const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
 module.exports = {
-  mode: process.env.NODE_ENV || 'production',
+  mode: 'development',
   entry: './src/renderer/index.tsx',
   target: 'web',
+  devtool: 'source-map',
   output: {
-    path: path.resolve(__dirname, 'dist/renderer'),
+    path: path.join(__dirname, 'dist/renderer'),
     filename: 'renderer.js',
-    publicPath: './'
+    publicPath: '/'
   },
-  resolve: {
-    extensions: ['.tsx', '.ts', '.js'],
+  devServer: {
+    static: {
+      directory: path.join(__dirname, 'dist/renderer'),
+    },
+    hot: true,
+    historyApiFallback: true,
+    port: 3000,
   },
   module: {
     rules: [
@@ -26,18 +32,13 @@ module.exports = {
       },
     ],
   },
+  resolve: {
+    extensions: ['.tsx', '.ts', '.js'],
+  },
   plugins: [
     new HtmlWebpackPlugin({
       template: './src/renderer/index.html',
       filename: 'index.html',
     }),
   ],
-  ...(process.env.NODE_ENV === 'development' ? {
-    devServer: {
-      static: {
-        directory: path.join(__dirname, 'dist/renderer'),
-      },
-      port: 3000,
-    }
-  } : {})
 };
