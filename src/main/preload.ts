@@ -12,6 +12,15 @@ try {
       return () => {
         ipcRenderer.removeListener(channel, callback);
       };
+    },
+    convertAudio: (audioPath: string) => {
+      return ipcRenderer.invoke('convert-audio', audioPath);
+    },
+    onConversionStatus: (callback: (status: any) => void) => {
+      ipcRenderer.on('conversion-status', (_event, status) => callback(status));
+      return () => {
+        ipcRenderer.removeAllListeners('conversion-status');
+      };
     }
   };
 

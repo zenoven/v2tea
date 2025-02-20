@@ -20,6 +20,15 @@ async function processAudio() {
   try {
     const { audioPath } = workerData;
 
+    if (!audioPath) {
+      throw new Error('未提供音频文件路径');
+    }
+
+    // 检查文件是否存在
+    if (!fs.existsSync(audioPath)) {
+      throw new Error(`音频文件不存在: ${audioPath}`);
+    }
+
     // 转换为 WAV 格式
     parentPort?.postMessage({ type: 'status', data: { status: 'converting', message: '正在转换音频格式...' } });
 
@@ -69,7 +78,13 @@ async function processAudio() {
     parentPort?.postMessage({ type: 'complete', data: float32Array });
   } catch (error) {
     console.error('音频处理失败:', error);
-    parentPort?.postMessage({ type: 'error', data: error });
+    parentPort?.postMessage({
+      type: 'error',
+      data: {
+        message: error instanceof Error ? error.message : '未知错误',
+        details: error
+      }
+    });
   }
 }
 

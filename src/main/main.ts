@@ -1,9 +1,10 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import isDev from 'electron-is-dev';
 import * as fs from 'fs';
 import WhisperService from './whisperService';
 import { VideoDownloader } from './videoDownloader';
+import { Worker } from 'worker_threads';
 
 // 添加环境判断
 const isDevMode = isDev && process.env.NODE_ENV === 'development';
@@ -131,6 +132,33 @@ class MainWindow {
 
     this._window.on('closed', () => {
       this._window = null;
+    });
+
+    // 添加音频转换处理
+    ipcMain.handle('convert-audio', async (event, audioPath) => {
+      return new Promise((resolve, reject) => {
+        const worker = new Worker(path.join(__dirname, 'audioWorker.js'), {
+          workerData: { audioPath }
+        });
+
+        worker.on('message', (message) => {
+          if (message.type === 'status') {
+            // 转发状态消息到渲染进程
+            this._window?.webContents.send('conversion-status', message.data);
+          } else if (message.type === 'complete') {
+            resolve(message.data);
+          } else if (message.type === 'error') {
+            reject(message.data);
+          }
+        });
+
+        worker.on('error', reject);
+        worker.on('exit', (code) => {
+          if (code !== 0) {
+            reject(new Error(`Worker stopped with exit code ${code}`));
+          }
+        });
+      });
     });
   }
 
