@@ -8,7 +8,6 @@ import * as fs from 'fs';
 import { nodewhisper } from 'nodejs-whisper';
 import { app } from 'electron';
 import * as process from 'process';
-import * as shell from 'shelljs';
 import * as os from 'os';
 import { WaveFile } from 'wavefile';
 
@@ -78,8 +77,6 @@ class WhisperService {
       return WhisperService.instance;
     }
     WhisperService.instance = this;
-    // 设置 shelljs 的 execPath
-    shell.config.execPath = process.execPath;
     this.setupIpcHandlers();
   }
 
@@ -93,11 +90,16 @@ class WhisperService {
       // 先用 audioWorker 转换音频
       const audioData = await new Promise<Float32Array>((resolve, reject) => {
         const audioWorker = new Worker(path.join(__dirname, 'audioWorker.js'), {
-          workerData: { audioPath }
+          workerData: {
+            audioPath,
+            resourcesPath: process.resourcesPath
+          }
         });
 
         audioWorker.on('message', (message) => {
-          if (message.type === 'complete') {
+          if (message.type === 'log') {
+            console.log('Worker Log:', message.data.message, message.data.details);
+          } else if (message.type === 'complete') {
             resolve(message.data);
           } else if (message.type === 'error') {
             reject(message.data);

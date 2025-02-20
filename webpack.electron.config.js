@@ -49,14 +49,32 @@ module.exports = {
     'fluent-ffmpeg': 'commonjs2 fluent-ffmpeg',
     'ffmpeg-static': 'commonjs2 ffmpeg-static',
     'nodejs-whisper': 'commonjs2 nodejs-whisper',
-    'child_process': 'commonjs2 child_process'
+    'child_process': 'commonjs2 child_process',
+    'electron': 'commonjs2 electron',
+    'wavefile': 'commonjs2 wavefile',
+    'undici': 'commonjs2 undici',
+    'electron-store': 'commonjs2 electron-store'
   },
   node: {
     __dirname: false,
     __filename: false,
   },
   optimization: {
-    minimize: false
+    minimize: false,
+    splitChunks: {
+      chunks: 'all',
+      maxInitialRequests: Infinity,
+      minSize: 0,
+      cacheGroups: {
+        vendor: {
+          test: /[\\/]node_modules[\\/]/,
+          name(module) {
+            const packageName = module.context.match(/[\\/]node_modules[\\/](.*?)([\\/]|$)/)[1];
+            return `vendor.${packageName.replace('@', '')}`;
+          },
+        },
+      },
+    },
   },
   experiments: {
     topLevelAwait: true

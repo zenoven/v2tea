@@ -6,11 +6,30 @@ import * as os from 'os';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
 
+// 添加一个辅助函数来发送日志
+function sendLog(message: string, data?: any) {
+  parentPort?.postMessage({
+    type: 'log',
+    data: { message, details: data }
+  });
+}
+
 // 设置 ffmpeg 路径
 if (!ffmpegStatic) {
   throw new Error('找不到 ffmpeg');
 }
-ffmpeg.setFfmpegPath(ffmpegStatic);
+
+// 确保 ffmpeg 路径是绝对路径
+const ffmpegPath = path.resolve(ffmpegStatic);
+sendLog('FFmpeg 路径:', {
+  original: ffmpegStatic,
+  resolved: ffmpegPath,
+  exists: fs.existsSync(ffmpegPath),
+  isFile: fs.existsSync(ffmpegPath) && fs.statSync(ffmpegPath).isFile()
+});
+
+// 设置 ffmpeg 路径
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 // 定义 WAV 格式接口
 interface WavFormat {
