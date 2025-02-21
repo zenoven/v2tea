@@ -1,15 +1,17 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
+const isDevelopment = process.env.NODE_ENV === 'development';
+
 module.exports = {
   mode: process.env.NODE_ENV || 'production',
   entry: './src/renderer/index.tsx',
   target: 'web',
-  devtool: process.env.NODE_ENV === 'development' ? 'source-map' : false,
+  devtool: isDevelopment ? 'source-map' : false,
   output: {
     path: path.join(__dirname, 'dist/renderer'),
     filename: 'renderer.js',
-    publicPath: './'
+    publicPath: isDevelopment ? '/' : './'
   },
   devServer: {
     static: {
@@ -18,6 +20,9 @@ module.exports = {
     hot: true,
     historyApiFallback: true,
     port: 3000,
+    devMiddleware: {
+      publicPath: '/'
+    }
   },
   module: {
     rules: [
