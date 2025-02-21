@@ -15,7 +15,7 @@
     "build:electron": "cross-env NODE_ENV=production webpack --config webpack.electron.config.js --no-watch",
     "build:react": "cross-env NODE_ENV=production webpack --config webpack.react.config.js --no-dev-server",
     "start": "electron .",
-    "postinstall": "cd node_modules/nodejs-whisper && git submodule update --init --recursive && cd cpp/whisper.cpp && cmake -B build && cd build && make && cd ../../../../ && npx nodejs-whisper download medium",
+    "postinstall": "npx nodejs-whisper download && cd node_modules/nodejs-whisper && git submodule update --init --recursive && cd cpp/whisper.cpp && cmake -B build && cmake --build build --config Release && cd ../../../../../",
     "postbuild": "electron-builder",
     "build:mac": "cross-env NODE_ENV=production npm run build -- --mac",
     "build:win": "cross-env NODE_ENV=production npm run build -- --win",

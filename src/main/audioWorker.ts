@@ -19,8 +19,13 @@ if (!ffmpegStatic) {
   throw new Error('找不到 ffmpeg');
 }
 
-// 确保 ffmpeg 路径是绝对路径
-const ffmpegPath = path.resolve(ffmpegStatic);
+// 修改 ffmpeg 路径处理
+let ffmpegPath = ffmpegStatic;
+if (ffmpegPath.includes('app.asar') && !ffmpegPath.includes('unpacked')) {
+  // 将 app.asar 替换为 app.asar.unpacked
+  ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
+}
+
 sendLog('FFmpeg 路径:', {
   original: ffmpegStatic,
   resolved: ffmpegPath,
